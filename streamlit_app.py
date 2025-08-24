@@ -340,12 +340,6 @@ st.set_page_config(page_title="Fresh AI Research Scraper", layout="wide")
 st.title("🕸️ Fresh Content Scraper → Summarizer → PDF")
 st.caption("Enter a topic, fetch only the latest items, summarize with OpenAI, and export a clean PDF. ")
 
-with st.expander("🔐 Setup notes", expanded=False):
-    st.markdown(
-        "- Set API keys via environment variables or `st.secrets`: **OPENAI_API_KEY**, **TAVILY_API_KEY**, **YOUTUBE_API_KEY**.\n"
-        "- Ensure Playwright is installed and browsers are set up: `pip install playwright && playwright install chromium`.\n"
-        "- Avoid hard-coding secrets in your source files (e.g., remove any default API keys or proxy creds in `youtube.py`)."
-    )
 
 col1, col2 = st.columns([3, 2])
 with col1:
@@ -353,26 +347,24 @@ with col1:
     days_window = st.slider("Max age (days)", min_value=1, max_value=90, value=14, help="Only keep items whose date is within this window. Items with unknown dates are dropped.")
 with col2:
     max_results = st.number_input("Max results per source", 1, 25, 5)
-    tavily_only = st.toggle("Tavily search only", value=False, help="When enabled, use Tavily only; otherwise run selected sources below.")
+    # tavily_only = st.toggle("Tavily search only", value=False, help="When enabled, use Tavily only; otherwise run selected sources below.")
 
 # Option to include undated items (may expand results if sites hide dates)
 include_undated = st.checkbox("Include undated items (fallback)", value=False)
 
-if not tavily_only:
-    st.subheader("Sources to include")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        use_dbta = st.checkbox("DBTA", value=True)
-    with c2:
-        use_scidaily = st.checkbox("ScienceDaily", value=True)
-    with c3:
-        use_ai = st.checkbox("Analytics Insight", value=False)
-    with c4:
-        use_yt = st.checkbox("YouTube", value=False)
-        yt_channel = st.text_input("YouTube channel (optional)", value="NeuralNine") if use_yt else ""
-else:
-    use_dbta = use_scidaily = use_ai = use_yt = False
-    yt_channel = ""
+
+st.subheader("Sources to include")
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    use_dbta = st.checkbox("DBTA", value=True)
+with c2:
+    use_scidaily = st.checkbox("ScienceDaily", value=True)
+with c3:
+    use_ai = st.checkbox("Analytics Insight", value=False)
+with c4:
+    use_yt = st.checkbox("YouTube", value=False)
+    yt_channel = st.text_input("YouTube channel (optional)", value="NeuralNine") if use_yt else ""   
+
 
 summ_model = st.selectbox("OpenAI model", ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"], index=0)
 run_btn = st.button("🚀 Run")
@@ -381,28 +373,25 @@ run_btn = st.button("🚀 Run")
 async def collect_records() -> List[Dict[str, Any]]:
     all_records: List[Dict[str, Any]] = []
 
-    if tavily_only:
-        with st.spinner("Searching via Tavily…"):
-            res = await run_tavily(topic, num_results=max_results)
-            all_records.extend(res)
-    else:
-        tasks = []
-        if use_dbta:
-            tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
-        if use_scidaily:
-            tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
-        if use_ai:
-            tasks.append(run_analytics_insight(topic, max_results=max_results))
 
-        if tasks:
-            with st.spinner("Scraping async sources…"):
-                results_lists = await asyncio.gather(*tasks)
-                for lst in results_lists:
-                    all_records.extend(lst or [])
 
-        if use_yt:
-            with st.spinner("Fetching YouTube transcripts…"):
-                all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
+    tasks = []
+    if use_dbta:
+        tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
+    if use_scidaily:
+        tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
+    if use_ai:
+        tasks.append(run_analytics_insight(topic, max_results=max_results))
+
+    if tasks:
+        with st.spinner("Scraping async sources…"):
+            results_lists = await asyncio.gather(*tasks)
+            for lst in results_lists:
+                all_records.extend(lst or [])
+
+    if use_yt:
+        with st.spinner("Fetching YouTube transcripts…"):
+            all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))    
 
     all_records = dedupe_by_url(all_records)
     filtered = []
