@@ -383,28 +383,28 @@ run_btn = st.button("🚀 Run")
 async def collect_records() -> List[Dict[str, Any]]:
     all_records: List[Dict[str, Any]] = []
 
-    if tavily_only:
-        with st.spinner("Searching via Tavily…"):
-            res = await run_tavily(topic, num_results=max_results)
-            all_records.extend(res)
-    else:
-        tasks = []
-        if use_dbta:
-            tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
-        if use_scidaily:
-            tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
-        if use_ai:
-            tasks.append(run_analytics_insight(topic, max_results=max_results))
+    # if tavily_only:
+    #     with st.spinner("Searching via Tavily…"):
+    #         res = await run_tavily(topic, num_results=max_results)
+    #         all_records.extend(res)
+    
+    tasks = []
+    if use_dbta:
+        tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
+    if use_scidaily:
+        tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
+    if use_ai:
+        tasks.append(run_analytics_insight(topic, max_results=max_results))
 
-        if tasks:
-            with st.spinner("Scraping async sources…"):
-                results_lists = await asyncio.gather(*tasks)
-                for lst in results_lists:
-                    all_records.extend(lst or [])
+    if tasks:
+        with st.spinner("Scraping async sources…"):
+            results_lists = await asyncio.gather(*tasks)
+            for lst in results_lists:
+                all_records.extend(lst or [])
 
-        if use_yt:
-            with st.spinner("Fetching YouTube transcripts…"):
-                all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
+    if use_yt:
+        with st.spinner("Fetching YouTube transcripts…"):
+            all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
 
     all_records = dedupe_by_url(all_records)
     filtered = []
@@ -466,6 +466,7 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design to ensure freshness."
 )
+
 
 
 
