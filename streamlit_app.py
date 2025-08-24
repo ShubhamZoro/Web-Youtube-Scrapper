@@ -90,26 +90,60 @@ except Exception:
     TavilyScraper = None
 
 # ------------------------- Playwright one-time init -------------------------
+# ------------------------- Playwright one-time init (fixed) -------------------------
 def ensure_playwright_chromium() -> bool:
     """
-    One-time downloader for Playwright Chromium on Streamlit Cloud / fresh envs.
-    Safe to call multiple times; no-ops if Chromium is already cached.
+    Ensure the Playwright Chromium bundle is present.
+    Works on Streamlit Cloud / fresh envs. Safe to call multiple times.
     """
     try:
-        from playwright.__main__ import main as pw_main  # CLI entrypoint
-        import pathlib
+        import pathlib, sys, subprocess
 
         cache = pathlib.Path.home() / ".cache" / "ms-playwright"
-        has_chromium = cache.exists() and any(p.name.startswith("chromium") for p in cache.iterdir())
-        if not has_chromium:
-            pw_main(["install", "chromium"])  # downloads browser bundle
-        return True
+        def _has_browser() -> bool:
+            if not cache.exists():
+                return False
+            for p in cache.iterdir():
+                name = p.name.lower()
+                if name.startswith("chromium") or name.startswith("chromium-headless-shell"):
+                    return True
+            return False
+
+        if _has_browser():
+            return True
+
+        # Preferred: run the CLI via subprocess (no arg issues)
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            # Uncomment to debug: st.write(result.stdout or result.stderr)
+        except Exception:
+            # Fallback: call the CLI entrypoint by setting sys.argv
+            try:
+                from playwright.__main__ import main as pw_main
+                import sys as _sys
+                _sys.argv = ["playwright", "install", "chromium"]
+                pw_main()  # note: no args passed directly
+            except Exception as e2:
+                try:
+                    st.warning(f"Playwright install fallback failed: {e2}")
+                except Exception:
+                    pass
+                return _has_browser()
+
+        return _has_browser()
+
     except Exception as e:
         try:
             st.warning(f"Playwright auto-install failed: {e}")
         except Exception:
             pass
         return False
+
 
 # ------------------------- Async runner (no asyncio.run) -------------------------
 def run_coro(coro):
@@ -566,3 +600,4 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design (unless you opt in)."
 )
+
