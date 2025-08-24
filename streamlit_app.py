@@ -70,6 +70,11 @@ try:
 except Exception:
     AnalyticsInsightScraper = None
 
+try:
+    from tavily_scrapper import TavilyScraper
+except Exception:
+    TavilyScraper = None
+
 # ------------------------- Async runner (no asyncio.run) -------------------------
 # Streamlit runs in a non-async thread. We avoid asyncio.run() and manually manage a loop.
 
@@ -129,7 +134,7 @@ def parse_date_any(s: Optional[str]) -> Optional[datetime]:
             return dt
         except Exception:
             pass
-    m = re.search(r"(20\d{2})", s)
+    m = re.(r"(20\d{2})", s)
     if m:
         year = int(m.group(1))
         try:
@@ -141,13 +146,13 @@ def parse_date_any(s: Optional[str]) -> Optional[datetime]:
 def extract_date_from_content(text: str) -> Optional[datetime]:
     if not text:
         return None
-    around = re.search(r"(?:Published|Updated|Posted)\s*[:\-]?\s*(.+?)\b(?:\.|\n|$)", text, re.IGNORECASE)
+    around = re.(r"(?:Published|Updated|Posted)\s*[:\-]?\s*(.+?)\b(?:\.|\n|$)", text, re.IGNORECASE)
     if around:
         dt = parse_date_any(around.group(1))
         if dt:
             return dt
     for pat in DATE_PATTERNS:
-        m = re.search(pat, text, re.IGNORECASE)
+        m = re.(pat, text, re.IGNORECASE)
         if m:
             dt = parse_date_any(m.group(0))
             if dt:
@@ -205,7 +210,7 @@ async def summarize_blocks(blocks: List[Dict[str, Any]], topic: str, model: str 
         )
         # OpenAI Chat Completions is sync over HTTP; run in executor to avoid blocking loop
         def _call_openai():
-            resp = client.chat_completions.create(
+            resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2,
@@ -265,7 +270,25 @@ def make_pdf(items: List[Dict[str, Any]], topic: str) -> bytes:
         pdf.ln(2)
     return pdf.output(dest="S").encode("latin1", errors="ignore")
 
-# ------------------------- Orchestrators (Tavily removed) -------------------------
+# ------------------------- Orchestrators -------------------------
+async def run_tavily(topic: str, num_results: int) -> List[Dict[str, Any]]:
+    results = []
+    if TavilyScraper is None:
+        st.warning("TavilyScraper module not found.")
+        return results
+    api_key = st.secrets.get("tavily_api_key", "") 
+    if not api_key:
+        st.error("TAVILY_API_KEY not set in environment or st.secrets.")
+        return results
+    tv = TavilyScraper(api_key, num_results=num_results)
+    data = await tv._and_scrape(topic)
+    for row in data:
+        url = row.get("url", "")
+        content = row.get("content", "")
+        first_line = (content.split(". ")[0] if content else "").strip()[:140]
+        results.append(coerce_record(title=first_line or url, url=url, content=content, published_raw=None, fallback_text_for_date=content))
+    return results
+
 async def run_dbta(topic: str, max_results: int, days_window: Optional[int]) -> List[Dict[str, Any]]:
     out = []
     if DBTADirectScraper is None:
@@ -319,27 +342,39 @@ st.set_page_config(page_title="Fresh AI Re Scraper", layout="wide")
 st.title("🕸️ Fresh Content Scraper → Summarizer → PDF")
 st.caption("Enter a topic, fetch only the latest items, summarize with OpenAI, and export a clean PDF. ")
 
+with st.expander("🔐 Setup notes", expanded=False):
+    st.markdown(
+        "- Set API keys via environment variables or `st.secrets`: **OPENAI_API_KEY**, **TAVILY_API_KEY**, **YOUTUBE_API_KEY**.\n"
+        "- Ensure Playwright is installed and browsers are set up: `pip install playwright && playwright install chromium`.\n"
+        "- Avoid hard-coding secrets in your source files (e.g., remove any default API keys or proxy creds in `youtube.py`)."
+    )
+
 col1, col2 = st.columns([3, 2])
 with col1:
     topic = st.text_input("Topic", placeholder="e.g., latest advancements in machine learning")
     days_window = st.slider("Max age (days)", min_value=1, max_value=90, value=14, help="Only keep items whose date is within this window. Items with unknown dates are dropped.")
 with col2:
     max_results = st.number_input("Max results per source", 1, 25, 5)
+    tavily_only = st.toggle("Tavily search only", value=False, help="When enabled, use Tavily only; otherwise run selected sources below.")
 
 # Option to include undated items (may expand results if sites hide dates)
 include_undated = st.checkbox("Include undated items (fallback)", value=False)
 
-st.subheader("Sources to include")
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    use_dbta = st.checkbox("DBTA", value=True)
-with c2:
-    use_scidaily = st.checkbox("ScienceDaily", value=True)
-with c3:
-    use_ai = st.checkbox("Analytics Insight", value=False)
-with c4:
-    use_yt = st.checkbox("YouTube", value=False)
-    yt_channel = st.text_input("YouTube channel (optional)", value="NeuralNine") if use_yt else ""
+if not tavily_only:
+    st.subheader("Sources to include")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        use_dbta = st.checkbox("DBTA", value=True)
+    with c2:
+        use_scidaily = st.checkbox("ScienceDaily", value=True)
+    with c3:
+        use_ai = st.checkbox("Analytics Insight", value=False)
+    with c4:
+        use_yt = st.checkbox("YouTube", value=False)
+        yt_channel = st.text_input("YouTube channel (optional)", value="NeuralNine") if use_yt else ""
+else:
+    use_dbta = use_scidaily = use_ai = use_yt = False
+    yt_channel = ""
 
 summ_model = st.selectbox("OpenAI model", ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"], index=0)
 run_btn = st.button("🚀 Run")
@@ -348,23 +383,28 @@ run_btn = st.button("🚀 Run")
 async def collect_records() -> List[Dict[str, Any]]:
     all_records: List[Dict[str, Any]] = []
 
-    tasks = []
-    if use_dbta:
-        tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
-    if use_scidaily:
-        tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
-    if use_ai:
-        tasks.append(run_analytics_insight(topic, max_results=max_results))
+    if tavily_only:
+        with st.spinner("Searching via Tavily…"):
+            res = await run_tavily(topic, num_results=max_results)
+            all_records.extend(res)
+    else:
+        tasks = []
+        if use_dbta:
+            tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
+        if use_scidaily:
+            tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
+        if use_ai:
+            tasks.append(run_analytics_insight(topic, max_results=max_results))
 
-    if tasks:
-        with st.spinner("Scraping async sources…"):
-            results_lists = await asyncio.gather(*tasks)
-            for lst in results_lists:
-                all_records.extend(lst or [])
+        if tasks:
+            with st.spinner("Scraping async sources…"):
+                results_lists = await asyncio.gather(*tasks)
+                for lst in results_lists:
+                    all_records.extend(lst or [])
 
-    if use_yt:
-        with st.spinner("Fetching YouTube transcripts…"):
-            all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
+        if use_yt:
+            with st.spinner("Fetching YouTube transcripts…"):
+                all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
 
     all_records = dedupe_by_url(all_records)
     filtered = []
