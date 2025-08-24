@@ -8,8 +8,6 @@ from typing import List, Dict, Any, Optional
 
 import streamlit as st
 api_key=st.secrets['openai_api_key']
-os.system("playwright install")
-
 # --- Windows asyncio policy fix (Playwright needs subprocess support) ---
 if os.name == "nt":
     try:
@@ -134,7 +132,7 @@ def parse_date_any(s: Optional[str]) -> Optional[datetime]:
             return dt
         except Exception:
             pass
-    m = re.(r"(20\d{2})", s)
+    m = re.search(r"(20\d{2})", s)
     if m:
         year = int(m.group(1))
         try:
@@ -146,13 +144,13 @@ def parse_date_any(s: Optional[str]) -> Optional[datetime]:
 def extract_date_from_content(text: str) -> Optional[datetime]:
     if not text:
         return None
-    around = re.(r"(?:Published|Updated|Posted)\s*[:\-]?\s*(.+?)\b(?:\.|\n|$)", text, re.IGNORECASE)
+    around = re.search(r"(?:Published|Updated|Posted)\s*[:\-]?\s*(.+?)\b(?:\.|\n|$)", text, re.IGNORECASE)
     if around:
         dt = parse_date_any(around.group(1))
         if dt:
             return dt
     for pat in DATE_PATTERNS:
-        m = re.(pat, text, re.IGNORECASE)
+        m = re.search(pat, text, re.IGNORECASE)
         if m:
             dt = parse_date_any(m.group(0))
             if dt:
@@ -276,12 +274,12 @@ async def run_tavily(topic: str, num_results: int) -> List[Dict[str, Any]]:
     if TavilyScraper is None:
         st.warning("TavilyScraper module not found.")
         return results
-    api_key = st.secrets.get("tavily_api_key", "") 
+    api_key =   st.secrets.get("tavily_api_key", "") 
     if not api_key:
         st.error("TAVILY_API_KEY not set in environment or st.secrets.")
         return results
     tv = TavilyScraper(api_key, num_results=num_results)
-    data = await tv._and_scrape(topic)
+    data = await tv.search_and_scrape(topic)
     for row in data:
         url = row.get("url", "")
         content = row.get("content", "")
@@ -295,7 +293,7 @@ async def run_dbta(topic: str, max_results: int, days_window: Optional[int]) -> 
         st.warning("DBTADirectScraper module not found.")
         return out
     scraper = DBTADirectScraper()
-    data = await scraper._and_scrape(query=topic, days=days_window, max_results=max_results)
+    data = await scraper.search_and_scrape(query=topic, days=days_window, max_results=max_results)
     for r in data or []:
         if r.get("error") or r.get("message"):
             continue
@@ -308,7 +306,7 @@ async def run_sciencedaily(topic: str, max_results: int, days_window: Optional[i
         st.warning("ScienceDailyDirectScraper module not found.")
         return out
     scraper = ScienceDailyDirectScraper()
-    data = await scraper._and_scrape(query=topic, days=days_window, max_results=max_results)
+    data = await scraper.search_and_scrape(query=topic, days=days_window, max_results=max_results)
     for r in data or []:
         if r.get("error") or r.get("message"):
             continue
@@ -337,7 +335,7 @@ def run_youtube(topic: str, channel: str, max_results: int) -> List[Dict[str, An
     return out
 
 # ------------------------- Streamlit UI -------------------------
-st.set_page_config(page_title="Fresh AI Re Scraper", layout="wide")
+st.set_page_config(page_title="Fresh AI Research Scraper", layout="wide")
 
 st.title("🕸️ Fresh Content Scraper → Summarizer → PDF")
 st.caption("Enter a topic, fetch only the latest items, summarize with OpenAI, and export a clean PDF. ")
