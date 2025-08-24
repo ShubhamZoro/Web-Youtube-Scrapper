@@ -4,7 +4,7 @@ import asyncio
 import requests
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-
+import streamlit as st
 
 class TavilyScraper:
     def __init__(self, api_key: str, num_results: int = 5):
@@ -65,7 +65,7 @@ class TavilyScraper:
 
 # -------------------- Run Example --------------------
 if __name__ == "__main__":
-    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "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")
+    TAVILY_API_KEY = st.secrets['tavily_api_key']
 
     query = "latest advancements in machine learning"
 
