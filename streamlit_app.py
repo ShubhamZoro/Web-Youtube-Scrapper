@@ -7,7 +7,21 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 
 import streamlit as st
-api_key=st.secrets['openai_api_key']
+
+# ------------------------- Secrets / API keys (safe lookup) -------------------------
+# Avoid KeyError at import-time; read env first, then secrets (either case)
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY")
+    or st.secrets.get("openai_api_key", st.secrets.get("OPENAI_API_KEY", ""))
+)
+TAVILY_API_KEY = (
+    os.getenv("TAVILY_API_KEY")
+    or st.secrets.get("tavily_api_key", st.secrets.get("TAVILY_API_KEY", ""))
+)
+YOUTUBE_API_KEY = (
+    os.getenv("YOUTUBE_API_KEY")
+    or st.secrets.get("youtube_api_key", st.secrets.get("YOUTUBE_API_KEY", ""))
+)
 
 # --- Windows asyncio policy fix (Playwright needs subprocess support) ---
 if os.name == "nt":
@@ -37,13 +51,14 @@ except Exception:
     except Exception:
         FPDF = None
 
-# OpenAI client
+# OpenAI client (SDK v1)
 try:
     from openai import OpenAI
 except Exception:
     OpenAI = None
 
 # ---- Import the user's scrapers ----
+# YouTube (your current module name)
 try:
     from youtube_scrap import get_videos_and_transcripts
 except Exception:
@@ -74,9 +89,29 @@ try:
 except Exception:
     TavilyScraper = None
 
-# ------------------------- Async runner (no asyncio.run) -------------------------
-# Streamlit runs in a non-async thread. We avoid asyncio.run() and manually manage a loop.
+# ------------------------- Playwright one-time init -------------------------
+def ensure_playwright_chromium() -> bool:
+    """
+    One-time downloader for Playwright Chromium on Streamlit Cloud / fresh envs.
+    Safe to call multiple times; no-ops if Chromium is already cached.
+    """
+    try:
+        from playwright.__main__ import main as pw_main  # CLI entrypoint
+        import pathlib
 
+        cache = pathlib.Path.home() / ".cache" / "ms-playwright"
+        has_chromium = cache.exists() and any(p.name.startswith("chromium") for p in cache.iterdir())
+        if not has_chromium:
+            pw_main(["install", "chromium"])  # downloads browser bundle
+        return True
+    except Exception as e:
+        try:
+            st.warning(f"Playwright auto-install failed: {e}")
+        except Exception:
+            pass
+        return False
+
+# ------------------------- Async runner (no asyncio.run) -------------------------
 def run_coro(coro):
     """Run a single coroutine to completion without asyncio.run()."""
     try:
@@ -97,9 +132,6 @@ def run_coro(coro):
                 loop.close()
             finally:
                 asyncio.set_event_loop(None)
-
-async def gather_list(coros: List[asyncio.Future]):
-    return await asyncio.gather(*coros)
 
 # ------------------------- Date utilities -------------------------
 DATE_PATTERNS = [
@@ -175,7 +207,7 @@ def within_days(record: Dict[str, Any], max_age_days: int) -> bool:
         return True
     dt = record.get("normalized_date")
     if not dt:
-        return False  # drop unknown dates to guarantee recency
+        return False  # drop unknown dates to guarantee recency (unless user opted in)
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     return dt >= cutoff
 
@@ -192,8 +224,11 @@ def dedupe_by_url(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # ------------------------- Summarization -------------------------
 async def summarize_blocks(blocks: List[Dict[str, Any]], topic: str, model: str = "gpt-4o-mini") -> List[Dict[str, Any]]:
     if OpenAI is None:
-        raise RuntimeError("openai package not installed. Please `pip install openai`. ")
-    client = OpenAI(api_key=api_key)
+        raise RuntimeError("openai package not installed. Please `pip install openai`.")
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is not set in environment or Streamlit secrets.")
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
     out = []
     for r in blocks:
         content = r.get("content", "")
@@ -203,10 +238,11 @@ async def summarize_blocks(blocks: List[Dict[str, Any]], topic: str, model: str 
             continue
         prompt = (
             "You are a precise analyst. Summarize the following article in ~120-180 words, "
-            "focusing on takeaways related to the topic: '" + topic + "'. "
+            f"focusing on takeaways related to the topic: '{topic}'. "
             "Capture key facts, dates, entities, and novel contributions. Avoid hype; be concise.\n\n"
             f"TITLE: {r.get('title','')}\nURL: {r.get('url','')}\nDATE: {r.get('normalized_date')}\n\nCONTENT:\n{content[:8000]}"
         )
+
         # OpenAI Chat Completions is sync over HTTP; run in executor to avoid blocking loop
         def _call_openai():
             resp = client.chat.completions.create(
@@ -215,13 +251,13 @@ async def summarize_blocks(blocks: List[Dict[str, Any]], topic: str, model: str 
                 temperature=0.2,
             )
             return resp.choices[0].message.content.strip()
+
         summary_text = await asyncio.to_thread(_call_openai)
         r["summary"] = summary_text
         out.append(r)
     return out
 
 # ------------------------- PDF creation -------------------------
-
 def make_pdf(items: List[Dict[str, Any]], topic: str) -> bytes:
     if not items:
         raise ValueError("No items to include in PDF")
@@ -248,6 +284,7 @@ def make_pdf(items: List[Dict[str, Any]], topic: str) -> bytes:
         doc.build(story)
         return buf.getvalue()
 
+    # Fallback using FPDF
     if FPDF is None:
         raise RuntimeError("Neither reportlab nor fpdf is available to create PDFs.")
 
@@ -275,7 +312,7 @@ async def run_tavily(topic: str, num_results: int) -> List[Dict[str, Any]]:
     if TavilyScraper is None:
         st.warning("TavilyScraper module not found.")
         return results
-    api_key = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "") 
+    api_key = TAVILY_API_KEY
     if not api_key:
         st.error("TAVILY_API_KEY not set in environment or st.secrets.")
         return results
@@ -319,21 +356,19 @@ async def run_dbta(topic: str, max_results: int, days_window: Optional[int]) -> 
             )
         )
     return out
-    scraper = DBTADirectScraper()
-    data = await scraper.search_and_scrape(query=topic, days=days_window, max_results=max_results)
-    for r in data or []:
-        if r.get("error") or r.get("message"):
-            continue
-        out.append(coerce_record(r.get("title"), r.get("url"), r.get("content", ""), r.get("published_date"), r.get("content", "")))
-    return out
 
 async def run_sciencedaily(topic: str, max_results: int, days_window: Optional[int]) -> List[Dict[str, Any]]:
     out = []
     if ScienceDailyDirectScraper is None:
         st.warning("ScienceDailyDirectScraper module not found.")
         return out
-    scraper = ScienceDailyDirectScraper()
-    data = await scraper.search_and_scrape(query=topic, days=days_window, max_results=max_results)
+    try:
+        scraper = ScienceDailyDirectScraper()
+        data = await scraper.search_and_scrape(query=topic, days=days_window, max_results=max_results)
+    except Exception as e:
+        st.error("ScienceDaily scraping failed.")
+        st.exception(e)
+        return out
     for r in data or []:
         if r.get("error") or r.get("message"):
             continue
@@ -345,8 +380,21 @@ async def run_analytics_insight(topic: str, max_results: int) -> List[Dict[str, 
     if AnalyticsInsightScraper is None:
         st.warning("AnalyticsInsightScraper module not found.")
         return out
+    # Self-heal: ensure Chromium is present (in case called directly)
+    ensure_playwright_chromium()
     scraper = AnalyticsInsightScraper(query=topic)
-    await scraper.scrape()
+    try:
+        await scraper.scrape()
+    except Exception as e:
+        # Try once to install chromium then retry
+        try:
+            from playwright.__main__ import main as pw_main
+            await asyncio.to_thread(pw_main, ["install", "chromium"])
+            await scraper.scrape()
+        except Exception as e2:
+            st.error("Analytics Insight scraping failed.")
+            st.exception(e2)
+            return out
     for r in scraper.results[:max_results]:
         out.append(coerce_record(r.get("title"), r.get("link"), r.get("content", ""), r.get("date"), r.get("content", "")))
     return out
@@ -354,9 +402,14 @@ async def run_analytics_insight(topic: str, max_results: int) -> List[Dict[str, 
 def run_youtube(topic: str, channel: str, max_results: int) -> List[Dict[str, Any]]:
     out = []
     if get_videos_and_transcripts is None:
-        st.warning("youtube.py not found or failed to import.")
+        st.warning("youtube_scrap.py not found or failed to import.")
         return out
-    data = get_videos_and_transcripts(channel_name=channel, topic=topic, max_results=max_results)
+    try:
+        data = get_videos_and_transcripts(channel_name=channel, topic=topic, max_results=max_results)
+    except Exception as e:
+        st.error("YouTube fetch failed.")
+        st.exception(e)
+        return out
     for v in data.get("videos", []):
         out.append(coerce_record(v.get("title"), v.get("url"), v.get("transcript", ""), v.get("published_at"), v.get("description", "")))
     return out
@@ -365,13 +418,13 @@ def run_youtube(topic: str, channel: str, max_results: int) -> List[Dict[str, An
 st.set_page_config(page_title="Fresh AI Research Scraper", layout="wide")
 
 st.title("🕸️ Fresh Content Scraper → Summarizer → PDF")
-st.caption("Enter a topic, fetch only the latest items, summarize with OpenAI, and export a clean PDF. ")
+st.caption("Enter a topic, fetch only the latest items, summarize with OpenAI, and export a clean PDF.")
 
 with st.expander("🔐 Setup notes", expanded=False):
     st.markdown(
         "- Set API keys via environment variables or `st.secrets`: **OPENAI_API_KEY**, **TAVILY_API_KEY**, **YOUTUBE_API_KEY**.\n"
-        "- Ensure Playwright is installed and browsers are set up: `pip install playwright && playwright install chromium`.\n"
-        "- Avoid hard-coding secrets in your source files (e.g., remove any default API keys or proxy creds in `youtube.py`)."
+        "- Ensure Playwright is installed and browsers are set up (first run auto-installs Chromium).\n"
+        "- Avoid hard-coding secrets in your source files."
     )
 
 col1, col2 = st.columns([3, 2])
@@ -413,25 +466,44 @@ async def collect_records() -> List[Dict[str, Any]]:
             res = await run_tavily(topic, num_results=max_results)
             all_records.extend(res)
     else:
+        # If any Playwright-based source is enabled, ensure Chromium is present (first run only)
+        playwright_ready = True
+        need_playwright = any([use_dbta, use_scidaily, use_ai])
+        if need_playwright:
+            if st.session_state.get("pw_ready") is not True:
+                with st.spinner("Setting up Playwright (first run downloads Chromium)…"):
+                    playwright_ready = ensure_playwright_chromium()
+                st.session_state["pw_ready"] = bool(playwright_ready)
+            else:
+                playwright_ready = True
+
         tasks = []
-        if use_dbta:
+        if use_dbta and playwright_ready:
             tasks.append(run_dbta(topic, max_results=max_results, days_window=days_window))
-        if use_scidaily:
+        if use_scidaily and playwright_ready:
             tasks.append(run_sciencedaily(topic, max_results=max_results, days_window=days_window))
-        if use_ai:
+        if use_ai and playwright_ready:
             tasks.append(run_analytics_insight(topic, max_results=max_results))
+
+        if need_playwright and not playwright_ready:
+            st.error("Could not set up Playwright; skipping DBTA, ScienceDaily, and Analytics Insight.")
 
         if tasks:
             with st.spinner("Scraping async sources…"):
-                results_lists = await asyncio.gather(*tasks)
+                results_lists = await asyncio.gather(*tasks, return_exceptions=True)
                 for lst in results_lists:
-                    all_records.extend(lst or [])
+                    if isinstance(lst, Exception):
+                        st.exception(lst)
+                    else:
+                        all_records.extend(lst or [])
 
         if use_yt:
             with st.spinner("Fetching YouTube transcripts…"):
                 all_records.extend(run_youtube(topic, yt_channel or "", max_results=max_results))
 
+    # Dedupe and filter
     all_records = dedupe_by_url(all_records)
+
     filtered = []
     for r in all_records:
         if r.get("normalized_date"):
@@ -440,14 +512,17 @@ async def collect_records() -> List[Dict[str, Any]]:
         else:
             if include_undated:
                 filtered.append(r)
-    filtered.sort(key=lambda x: x.get("normalized_date") or datetime(1900,1,1, tzinfo=timezone.utc), reverse=True)
+
+    filtered.sort(key=lambda x: x.get("normalized_date") or datetime(1900, 1, 1, tzinfo=timezone.utc), reverse=True)
     return filtered
 
 if run_btn:
     if not topic.strip():
         st.error("Please enter a topic.")
     elif OpenAI is None and summ_model:
-        st.error("openai python package not installed. `pip install openai`. ")
+        st.error("openai python package not installed. `pip install openai`.")
+    elif not OPENAI_API_KEY:
+        st.error("OPENAI_API_KEY not set in environment or st.secrets.")
     else:
         # Use our custom runner to avoid asyncio.run(), but still leverage await-based tasks
         records = run_coro(collect_records())
@@ -489,5 +564,5 @@ if run_btn:
 st.markdown("---")
 st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
-    "Unknown-dated items are dropped by design to ensure freshness."
+    "Unknown-dated items are dropped by design (unless you opt in)."
 )
