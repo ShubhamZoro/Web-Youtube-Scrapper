@@ -26,4 +26,5 @@ libu2f-udev
 libvulkan1
 ca-certificates
 Chromium
-Chromium-chromedriver
+chromium-browser
+
