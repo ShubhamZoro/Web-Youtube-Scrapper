@@ -8,3 +8,4 @@ youtube-transcript-api
 openai
 reportlab
 fpdf2
+playwright-stealth
