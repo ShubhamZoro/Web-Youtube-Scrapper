@@ -203,7 +203,7 @@ def get_videos_and_transcripts_with_timeframe(
         Dictionary with videos, transcripts, and filtering metadata
     """
     
-    api_key = st.secrets.get("YOUTUBE_API_KEY", "") 
+    api_key = st.secrets['youtube_api_key']
     if not api_key:
         return {
             "error": "Set YOUTUBE_API_KEY environment variable with your YouTube Data API key"
