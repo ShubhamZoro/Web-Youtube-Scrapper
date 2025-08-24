@@ -90,7 +90,7 @@ except Exception:
     TavilyScraper = None
 
 # ------------------------- Playwright one-time init -------------------------
-# ------------------------- Playwright one-time init (fixed) -------------------------
+
 def ensure_playwright_chromium() -> bool:
     """
     Ensure the Playwright Chromium bundle is present.
@@ -100,6 +100,7 @@ def ensure_playwright_chromium() -> bool:
         import pathlib, sys, subprocess
 
         cache = pathlib.Path.home() / ".cache" / "ms-playwright"
+
         def _has_browser() -> bool:
             if not cache.exists():
                 return False
@@ -112,31 +113,11 @@ def ensure_playwright_chromium() -> bool:
         if _has_browser():
             return True
 
-        # Preferred: run the CLI via subprocess (no arg issues)
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "playwright", "install", "chromium"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            # Uncomment to debug: st.write(result.stdout or result.stderr)
-        except Exception:
-            # Fallback: call the CLI entrypoint by setting sys.argv
-            try:
-                from playwright.__main__ import main as pw_main
-                import sys as _sys
-                _sys.argv = ["playwright", "install", "chromium"]
-                pw_main()  # note: no args passed directly
-            except Exception as e2:
-                try:
-                    st.warning(f"Playwright install fallback failed: {e2}")
-                except Exception:
-                    pass
-                return _has_browser()
+        # Install Chromium browser bundle via CLI (correct way in this environment)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                       check=True, capture_output=True, text=True)
 
         return _has_browser()
-
     except Exception as e:
         try:
             st.warning(f"Playwright auto-install failed: {e}")
@@ -409,29 +390,44 @@ async def run_sciencedaily(topic: str, max_results: int, days_window: Optional[i
         out.append(coerce_record(r.get("title"), r.get("url"), r.get("content", ""), r.get("published_date"), r.get("content", "")))
     return out
 
+# ------------------------- Orchestrators: Analytics Insight -------------------------
 async def run_analytics_insight(topic: str, max_results: int) -> List[Dict[str, Any]]:
-    out = []
+    """Scrape Analytics Insight for `topic`, ensuring Playwright Chromium is available."""
+    out: List[Dict[str, Any]] = []
     if AnalyticsInsightScraper is None:
         st.warning("AnalyticsInsightScraper module not found.")
         return out
-    # Self-heal: ensure Chromium is present (in case called directly)
+
+    # Ensure Chromium is installed (one-time). Safe to call repeatedly.
     ensure_playwright_chromium()
+
     scraper = AnalyticsInsightScraper(query=topic)
     try:
         await scraper.scrape()
-    except Exception as e:
-        # Try once to install chromium then retry
+    except Exception:
+        # One retry after installing Chromium via subprocess (never call pw_main([...]))
         try:
-            from playwright.__main__ import main as pw_main
-            await asyncio.to_thread(pw_main, ["install", "chromium"])
+            import sys, subprocess
+            subprocess.run(
+                [sys.executable, "-m", "playwright", "install", "chromium"],
+                check=True, capture_output=True, text=True,
+            )
             await scraper.scrape()
         except Exception as e2:
             st.error("Analytics Insight scraping failed.")
             st.exception(e2)
             return out
+
     for r in scraper.results[:max_results]:
-        out.append(coerce_record(r.get("title"), r.get("link"), r.get("content", ""), r.get("date"), r.get("content", "")))
+        out.append(coerce_record(
+            title=r.get("title"),
+            url=r.get("link"),
+            content=r.get("content", ""),
+            published_raw=r.get("date"),
+            fallback_text_for_date=r.get("content", "")
+        ))
     return out
+
 
 def run_youtube(topic: str, channel: str, max_results: int) -> List[Dict[str, Any]]:
     out = []
@@ -600,4 +596,5 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design (unless you opt in)."
 )
+
 
