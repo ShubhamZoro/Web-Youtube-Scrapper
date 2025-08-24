@@ -769,7 +769,7 @@ async def run_tavily(topic: str, num_results: int) -> List[Dict[str, Any]]:
     if TavilyScraper is None:
         st.warning("TavilyScraper module not found.")
         return results
-    api_key = st.secrets.get("TAVILY_API_KEY", "") 
+    api_key = st.secrets.get("tavily_api_key", "") 
     if not api_key:
         st.error("TAVILY_API_KEY not set in environment or st.secrets.")
         return results
@@ -959,3 +959,4 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design to ensure freshness."
 )
+
