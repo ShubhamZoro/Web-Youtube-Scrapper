@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 import streamlit as st
 api_key=st.secrets['openai_api_key']
+os.system("playwright install")
 # --- Windows asyncio policy fix (Playwright needs subprocess support) ---
 if os.name == "nt":
     try:
@@ -453,3 +454,4 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design to ensure freshness."
 )
+
