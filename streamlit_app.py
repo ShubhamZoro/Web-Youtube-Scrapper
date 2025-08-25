@@ -17,63 +17,26 @@ if os.name == "nt":
         pass
 
 # Optional deps
-try:
-    from dateutil import parser as dateparser
-except Exception:
-    dateparser = None
+from dateutil import parser as dateparser
 
 # PDF generation (prefer reportlab, fallback to fpdf)
-try:
-    from reportlab.lib.pagesizes import LETTER
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors
-    _HAS_RL = True
-except Exception:
-    _HAS_RL = False
-    try:
-        from fpdf import FPDF
-    except Exception:
-        FPDF = None
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+
+from fpdf import FPDF
 
 # OpenAI client
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
+from openai import OpenAI
 
 # ---- Import the user's scrapers ----
-try:
-    from youtube_scrap import get_videos_and_transcripts
-except Exception:
-    get_videos_and_transcripts = None
-
-try:
-    from dbta import DBTADirectScraper
-except Exception as e:
-    DBTADirectScraper = None
-    try:
-        st.error("Failed to import dbta.py — see details below.")
-        st.exception(e)
-    except Exception:
-        pass
-
-try:
-    from sciencedaily import ScienceDailyDirectScraper
-except Exception:
-    ScienceDailyDirectScraper = None
-
-try:
-    from AnalyticsInsight_scrapper import AnalyticsInsightScraper
-except Exception:
-    AnalyticsInsightScraper = None
-
-try:
-    from tavily_scrapper import TavilyScraper
-except Exception:
-    TavilyScraper = None
-
+from youtube_scrap import get_videos_and_transcripts
+from dbta import DBTADirectScraper
+from sciencedaily import ScienceDailyDirectScraper
+from AnalyticsInsight_scrapper import AnalyticsInsightScraper
+from tavily_scrapper import TavilyScraper
 # ------------------------- Async runner (no asyncio.run) -------------------------
 # Streamlit runs in a non-async thread. We avoid asyncio.run() and manually manage a loop.
 
@@ -454,5 +417,6 @@ st.caption(
     "This app uses flexible date parsing and content scanning to keep only the latest items. "
     "Unknown-dated items are dropped by design to ensure freshness."
 )
+
 
 
